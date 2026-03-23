@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { supabase } from "./supabase.js";
 
 const P = {
   a: "#FF7A45", al: "#FFA070", ad: "#E05A20",
@@ -86,8 +87,17 @@ const Cd = ({ children: ch, style: s, onClick: oc }) => { const [hv, setHv] = us
 
 const Bt = ({ children: ch, primary: pr, danger: dg, full: fl, style: s, ...props }) => ( <button style={{ fontFamily: FN.ui, fontWeight: 700, borderRadius: 16, cursor: "pointer", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8, transition: "all .3s", width: fl ? "100%" : undefined, border: "none", outline: "none", padding: "13px 22px", fontSize: 15, ...(pr ? { background: `linear-gradient(135deg,${P.a},${P.pu})`, color: "#fff", boxShadow: `0 8px 24px ${P.a}30` } : dg ? { background: "rgba(251,113,133,.12)", color: P.re, border: `1px solid rgba(251,113,133,.25)` } : { background: P.cd, color: P.t1, border: `1px solid ${P.bd}` }), ...s }} {...props}>{ch}</button> );
 
-export default function App() {
+export default function App({ supabaseUser, onSignOut }) {
   const [user, setUser] = useState(null);
+
+  // Auto-login from Supabase
+  useEffect(() => {
+    if (supabaseUser && !user) {
+      setUser({ role: supabaseUser.role || "trainer", name: supabaseUser.name || "Usuário", id: supabaseUser.id });
+      setPg("home");
+    }
+  }, [supabaseUser]);
+
   const [pg, setPg] = useState("home");
   const [toast, setToast] = useState(null);
   const [sel, setSel] = useState(null);
@@ -102,7 +112,72 @@ export default function App() {
   const [photos, setPhotos] = useState({});
   const [profPh, setProfPh] = useState({});
 
+  const [modal, setModal] = useState(null);
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPass, setAuthPass] = useState("");
+  const [authName, setAuthName] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authMode, setAuthMode] = useState("login"); // login or register
+  const [realStudents, setRealStudents] = useState([]);
+
   const show = (m) => { setToast(m); setTimeout(() => setToast(null), 3000); };
+
+  // Auth functions
+  const handleLogin = async (role) => {
+    if (!supabase) { show("Supabase não configurado"); return; }
+    setAuthLoading(true);
+    try {
+      if (authMode === "register") {
+        const { data, error } = await supabase.auth.signUp({
+          email: authEmail, password: authPass,
+          options: { data: { name: authName || authEmail.split("@")[0], role } }
+        });
+        if (error) throw error;
+        // Create profile
+        if (data.user) {
+          await supabase.from("profiles").insert({ id: data.user.id, name: authName || authEmail.split("@")[0], email: authEmail, role });
+        }
+        show("Conta criada! Verifique seu email se necessário.");
+        setUser({ role, id: data.user?.id, name: authName || authEmail.split("@")[0] });
+        setModal(null); setPg("home");
+      } else {
+        const { data, error } = await supabase.auth.signInWithPassword({ email: authEmail, password: authPass });
+        if (error) throw error;
+        const { data: profile } = await supabase.from("profiles").select("*").eq("id", data.user.id).single();
+        setUser({ role: profile?.role || role, id: data.user.id, name: profile?.name || authEmail.split("@")[0] });
+        setModal(null); setPg("home");
+        show("Login realizado! 🎉");
+      }
+    } catch (err) {
+      show("Erro: " + (err.message || "Tente novamente"));
+    }
+    setAuthLoading(false);
+  };
+
+  const handleLogout = async () => {
+    if (onSignOut) { await onSignOut(); }
+    setUser(null); setPg("home"); setSel(null);
+  };
+
+  // Check existing session on load
+  useEffect(() => {
+    if (!supabase) return;
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session?.user) {
+        supabase.from("profiles").select("*").eq("id", session.user.id).single().then(({ data: profile }) => {
+          if (profile) setUser({ role: profile.role, id: session.user.id, name: profile.name });
+        });
+      }
+    });
+  }, []);
+
+  // Fetch real students if trainer
+  useEffect(() => {
+    if (!supabase || !user || user.role !== "trainer") return;
+    supabase.from("students").select("*, profiles(name, email, photo_url)").eq("trainer_id", user.id).then(({ data }) => {
+      if (data) setRealStudents(data);
+    });
+  }, [user]);
   useEffect(() => { if (!aR || rT <= 0) return; const t = setTimeout(() => setRT(p => p - 1), 1000); return () => clearTimeout(t); }, [aR, rT]);
   useEffect(() => { if (aR && rT <= 0) setAR(false); }, [rT, aR]);
 
@@ -201,13 +276,13 @@ export default function App() {
 
           {/* CTAs */}
           <div style={{ display: "flex", flexDirection: "column", gap: 14, marginBottom: 36 }}>
-            <button onClick={() => { setUser({ role: "trainer" }); setPg("home"); }} style={{ width: "100%", padding: "20px 24px", cursor: "pointer", textAlign: "left", borderRadius: 28, border: `1px solid ${P.a}35`, background: `linear-gradient(135deg,${P.a}16,${P.a}06)`, display: "flex", alignItems: "center", gap: 18, color: P.t1, position: "relative", overflow: "hidden" }}>
+            <button onClick={() => setModal("login-trainer")} style={{ width: "100%", padding: "20px 24px", cursor: "pointer", textAlign: "left", borderRadius: 28, border: `1px solid ${P.a}35`, background: `linear-gradient(135deg,${P.a}16,${P.a}06)`, display: "flex", alignItems: "center", gap: 18, color: P.t1, position: "relative", overflow: "hidden" }}>
               <div style={{ position: "absolute", top: 0, left: "-100%", width: "200%", height: "100%", background: "linear-gradient(90deg,transparent,rgba(255,255,255,.04),transparent)", animation: "sh 5s infinite", pointerEvents: "none" }} />
               <div style={{ width: 52, height: 52, borderRadius: 18, background: `${P.a}1A`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><I.Db /></div>
               <div style={{ flex: 1 }}><div style={{ fontSize: 17, fontWeight: 700 }}>Começar como Personal</div><div style={{ fontSize: 14, color: P.t2, marginTop: 5 }}>Gestão completa + gamificação</div></div>
               <I.Ri s={20} />
             </button>
-            <button onClick={() => { setUser({ role: "student", id: "s1" }); setXP(ST[0].xp); setPg("home"); }} style={{ width: "100%", padding: "18px 24px", cursor: "pointer", textAlign: "left", borderRadius: 28, border: `1px solid ${P.bd}`, background: P.cd, display: "flex", alignItems: "center", gap: 18, color: P.t1 }}>
+            <button onClick={() => setModal("login-student")} style={{ width: "100%", padding: "18px 24px", cursor: "pointer", textAlign: "left", borderRadius: 28, border: `1px solid ${P.bd}`, background: P.cd, display: "flex", alignItems: "center", gap: 18, color: P.t1 }}>
               <div style={{ width: 52, height: 52, borderRadius: 18, background: P.hv, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><I.Ur /></div>
               <div style={{ flex: 1 }}><div style={{ fontSize: 16, fontWeight: 700 }}>Entrar como Aluno</div><div style={{ fontSize: 14, color: P.t2, marginTop: 5 }}>Treinos gamificados</div></div>
               <I.Ri s={20} />
@@ -456,7 +531,7 @@ export default function App() {
 
   const TFin = () => { const tk=ST.length>0?Math.round(rev/ST.length):0;const pc=PLANS.map(p=>({...p,ct:ST.filter(s=>s.pl===p.id).length}));const mt=8000;const mp=Math.min(Math.round((rev/mt)*100),100);return <div style={{display:"flex",flexDirection:"column",gap:20}}><h2 style={{fontSize:26,fontWeight:800}}>Financeiro</h2><Cd style={{padding:0,overflow:"hidden",border:`1px solid ${P.gr}16`,background:`linear-gradient(135deg,${P.gr}08,${P.cy}04,${P.bg})`}}><div style={{padding:"26px 24px 22px"}}><div style={{display:"flex",justifyContent:"space-between",marginBottom:20}}><div><div style={{fontSize:12,color:P.t3,fontFamily:FN.m,marginBottom:10,letterSpacing:".1em"}}>RECEITA MENSAL</div><span style={{fontSize:44,fontWeight:800,color:P.gr,fontFamily:FN.m}}>R$<An value={rev}/></span></div><div style={{background:`${P.gr}12`,border:`1px solid ${P.gr}22`,borderRadius:12,padding:"6px 12px",display:"flex",alignItems:"center",gap:4,height:"fit-content"}}><I.Tu s={13}/><span style={{fontSize:14,fontWeight:800,color:P.gr,fontFamily:FN.m}}>+18%</span></div></div><div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}><span style={{fontSize:11,color:P.t3,fontFamily:FN.m}}>META R${mt.toLocaleString()}</span><span style={{fontSize:11,color:P.gr,fontWeight:700,fontFamily:FN.m}}>{mp}%</span></div><div style={{height:5,background:"rgba(255,255,255,.05)",borderRadius:4,overflow:"hidden"}}><div style={{height:"100%",width:`${mp}%`,background:`linear-gradient(90deg,${P.gr},${P.cy})`,borderRadius:4}}/></div></div></Cd><div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10}}>{[{l:"R$/Hora",v:"R$62",c:P.a},{l:"Horas/Sem",v:"11h",c:P.cy},{l:"Capacidade",v:"42%",c:P.pu}].map((k,i)=><Cd key={i} style={{padding:16,textAlign:"center"}}><div style={{fontSize:20,fontWeight:800,color:k.c,fontFamily:FN.m}}>{k.v}</div><div style={{fontSize:12,color:P.t3,marginTop:4}}>{k.l}</div></Cd>)}</div><Cd style={{padding:22}}><h4 style={{fontSize:17,fontWeight:700,marginBottom:18}}>Por Plano</h4><div style={{display:"flex",gap:12,marginBottom:18}}>{pc.map(p=><div key={p.id} style={{flex:1,textAlign:"center",padding:"18px 10px",borderRadius:20,border:`1px solid ${p.c}14`,background:`linear-gradient(135deg,${p.c}08,transparent)`}}><div style={{fontSize:26,marginBottom:8}}>{p.ic}</div><div style={{fontSize:26,fontWeight:800,color:p.c,fontFamily:FN.m}}>{p.ct}</div><div style={{fontSize:12,color:P.t3,marginTop:4}}>{p.nm}</div><div style={{fontSize:13,fontWeight:700,color:p.c,marginTop:6,fontFamily:FN.m}}>R${p.pr}</div></div>)}</div>{pc.map(p=>{const r=p.ct*p.pr;const pct=rev>0?(r/rev)*100:0;return <div key={p.id} style={{marginBottom:14}}><div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}><span style={{fontSize:13,fontWeight:600}}>{p.ic} {p.nm} ({p.ct})</span><span style={{fontSize:14,fontWeight:800,color:p.c,fontFamily:FN.m}}>R${r}</span></div><div style={{height:7,background:"rgba(255,255,255,.05)",borderRadius:5,overflow:"hidden"}}><div style={{height:"100%",width:`${pct}%`,background:p.c,borderRadius:5,transition:"width 1.4s cubic-bezier(.16,1,.3,1)"}}/></div></div>})}</Cd><Cd style={{padding:22}}><h4 style={{fontSize:17,fontWeight:700,marginBottom:18}}>Evolução 6 Meses</h4><Bars data={[{l:"Out",v:4200},{l:"Nov",v:4800},{l:"Dez",v:5100},{l:"Jan",v:5400},{l:"Fev",v:5700},{l:"Mar",v:rev}]} color={P.gr} h={105} prefix="R$" /></Cd></div>; };
 
-  const TSet = () => <div style={{display:"flex",flexDirection:"column",gap:22}}><h2 style={{fontSize:26,fontWeight:800}}>Configurações</h2><Cd><div style={{display:"flex",alignItems:"center",gap:20,marginBottom:24}}><label style={{position:"relative",cursor:"pointer"}}><div style={{width:72,height:72,borderRadius:24,background:profPh["trainer"]?"transparent":`linear-gradient(135deg,${P.a},${P.pu})`,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,fontSize:26,overflow:"hidden"}}>{profPh["trainer"]?<img src={profPh["trainer"]} style={{width:"100%",height:"100%",objectFit:"cover"}} alt=""/>:"PR"}</div><div style={{position:"absolute",bottom:-2,right:-2,width:24,height:24,borderRadius:12,background:P.a,border:`3px solid ${P.bg}`,display:"flex",alignItems:"center",justifyContent:"center"}}><I.Cm/></div><input type="file" accept="image/*" onChange={(e)=>handlePhoto(e,"profile","trainer")} style={{display:"none"}}/></label><div><div style={{fontSize:22,fontWeight:700}}>Prof. Ricardo</div><div style={{fontSize:14,color:P.t2,marginTop:3}}>Personal Trainer</div></div></div>{["Gerenciar Planos","Notificações","Editar Perfil","Ajuda"].map((x,i)=><div key={i} onClick={()=>show(`${x} — em breve!`)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"18px 0",borderTop:`1px solid ${P.bd}`,cursor:"pointer"}}><span style={{fontSize:16,fontWeight:500}}>{x}</span><I.Ri/></div>)}</Cd><Bt danger full onClick={()=>{setUser(null);setPg("home");setSel(null)}}><I.Lo/> Sair da Conta</Bt></div>;
+  const TSet = () => <div style={{display:"flex",flexDirection:"column",gap:22}}><h2 style={{fontSize:26,fontWeight:800}}>Configurações</h2><Cd><div style={{display:"flex",alignItems:"center",gap:20,marginBottom:24}}><label style={{position:"relative",cursor:"pointer"}}><div style={{width:72,height:72,borderRadius:24,background:profPh["trainer"]?"transparent":`linear-gradient(135deg,${P.a},${P.pu})`,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,fontSize:26,overflow:"hidden"}}>{profPh["trainer"]?<img src={profPh["trainer"]} style={{width:"100%",height:"100%",objectFit:"cover"}} alt=""/>:"PR"}</div><div style={{position:"absolute",bottom:-2,right:-2,width:24,height:24,borderRadius:12,background:P.a,border:`3px solid ${P.bg}`,display:"flex",alignItems:"center",justifyContent:"center"}}><I.Cm/></div><input type="file" accept="image/*" onChange={(e)=>handlePhoto(e,"profile","trainer")} style={{display:"none"}}/></label><div><div style={{fontSize:22,fontWeight:700}}>Prof. Ricardo</div><div style={{fontSize:14,color:P.t2,marginTop:3}}>Personal Trainer</div></div></div>{["Gerenciar Planos","Notificações","Editar Perfil","Ajuda"].map((x,i)=><div key={i} onClick={()=>show(`${x} — em breve!`)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"18px 0",borderTop:`1px solid ${P.bd}`,cursor:"pointer"}}><span style={{fontSize:16,fontWeight:500}}>{x}</span><I.Ri/></div>)}</Cd><Bt danger full onClick={handleLogout}><I.Lo/> Sair da Conta</Bt></div>;
 
   const SDet = () => { const s=sel;if(!s) return null;const c=sc(s.id);const pl=PLANS.find(p=>p.id===s.pl);return <div style={{display:"flex",flexDirection:"column",gap:20}}><div style={{display:"flex",alignItems:"center",gap:14}}><button onClick={()=>{setSel(null);setPg("students")}} style={{background:P.cd,border:"none",borderRadius:16,width:46,height:46,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",color:"#fff"}}><I.Le/></button><span style={{fontSize:16,color:P.t2}}>Perfil do Aluno</span></div><Cd style={{padding:0,overflow:"hidden"}}><div style={{height:100,background:`linear-gradient(135deg,${c}30,${P.pu}14)`}}/><div style={{padding:"0 24px 24px",marginTop:-44}}><div style={{display:"flex",alignItems:"flex-end",gap:18,marginBottom:20}}><Avatar id={s.id} av={s.av} sz={84}/><div style={{flex:1,paddingBottom:6}}><h2 style={{fontSize:24,fontWeight:800,marginBottom:6}}>{s.nm}</h2><div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}><span style={{background:`${c}1A`,borderRadius:12,padding:"4px 12px",fontSize:13,fontWeight:800,fontFamily:FN.m}}>LVL {s.lv}</span>{pl&&<span style={{fontSize:13,color:pl.c,fontWeight:600}}>{pl.ic} {pl.nm}</span>}</div></div></div><div style={{display:"flex",gap:10}}><Bt primary full onClick={()=>show("Editar treino — em breve!")}><I.Ed s={16}/> Editar Treino</Bt><Bt full onClick={()=>show("Chat — em breve!")}><I.Ms/> Mensagem</Bt></div></div></Cd><div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:10}}>{[{l:"XP",v:s.xp.toLocaleString(),c:P.a},{l:"Streak",v:s.sk+"d",c:s.sk>0?P.gr:P.re},{l:"Aderência",v:s.pg+"%",c:s.pg>80?P.gr:P.a},{l:"Freq.",v:s.fq.split("/")[0],c:P.cy}].map((x,i)=><Cd key={i} style={{padding:16,textAlign:"center"}}><div style={{fontSize:22,fontWeight:800,color:x.c,fontFamily:FN.m}}>{x.v}</div><div style={{fontSize:11,color:P.t3,marginTop:4}}>{x.l}</div></Cd>)}</div><Cd style={{padding:20}}><h4 style={{fontSize:16,fontWeight:700,marginBottom:14}}>Composição</h4><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>{[{l:"Peso",v:s.wt,i:"⚖️"},{l:"Gordura",v:s.bf,i:"📊"},{l:"Massa",v:s.lm,i:"💪"},{l:"Freq.",v:s.fq,i:"📅"}].map((m,i)=><div key={i} style={{background:P.hv,borderRadius:16,padding:14,border:`1px solid ${P.bd}`}}><div style={{display:"flex",alignItems:"center",gap:6,marginBottom:8}}><span style={{fontSize:16}}>{m.i}</span><span style={{fontSize:12,color:P.t3}}>{m.l}</span></div><div style={{fontSize:18,fontWeight:800}}>{m.v}</div></div>)}</div></Cd>{s.sl?.length>0&&<Cd style={{padding:18}}><div style={{fontSize:16,fontWeight:700,marginBottom:12}}>📅 Horários</div><div style={{display:"flex",gap:8,flexWrap:"wrap"}}>{s.sl.map(sl=>{const[d,h]=sl.split("-");return <span key={sl} style={{background:`${P.cy}12`,border:`1px solid ${P.cy}22`,borderRadius:12,padding:"6px 14px",fontSize:13,fontWeight:600,color:P.cy,fontFamily:FN.m}}>{d} {h}:00</span>})}</div></Cd>}<Cd style={{padding:22}}><h4 style={{fontSize:16,fontWeight:700,marginBottom:18}}>Desempenho</h4><Bars data={s.wp} color={c} h={75} unit="%" /></Cd>{s.wk.map((w,wi)=><Cd key={wi} style={{padding:0,overflow:"hidden"}}><div style={{padding:"18px 20px",background:`${c}08`,borderBottom:`1px solid ${P.bd}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{fontSize:16,fontWeight:700}}>{w.nm}</div><div style={{fontSize:13,color:P.t2,marginTop:3}}>{w.dy}</div></div></div>{w.ex.map((e,ei)=><div key={ei} style={{display:"flex",alignItems:"center",gap:16,padding:"14px 20px",borderBottom:ei<w.ex.length-1?`1px solid ${P.bd}`:"none"}}><div style={{width:34,height:34,borderRadius:12,background:`${c}14`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:700,color:c,fontFamily:FN.m}}>{ei+1}</div><div style={{flex:1}}><div style={{fontSize:15,fontWeight:600}}>{e.nm}</div><div style={{fontSize:13,color:P.t2,marginTop:3}}>{e.st} · {e.wt}</div></div></div>)}</Cd>)}</div>; };
 
@@ -512,6 +587,48 @@ export default function App() {
       )}
 
       {/* Toast */}
+      {/* Login Modal */}
+      {modal && (modal === "login-trainer" || modal === "login-student") && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.85)", backdropFilter: "blur(20px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100, animation: "fi .3s", padding: 20 }} onClick={() => setModal(null)}>
+          <div style={{ background: "#0D0D18", borderRadius: 28, padding: 32, width: "100%", maxWidth: 400, border: `1px solid ${P.bd}`, animation: "su .6s cubic-bezier(.16,1,.3,1)" }} onClick={e => e.stopPropagation()}>
+            <h2 style={{ fontSize: 24, fontWeight: 800, marginBottom: 6 }}>{modal === "login-trainer" ? "Área do Personal" : "Área do Aluno"}</h2>
+            <p style={{ fontSize: 14, color: P.t2, marginBottom: 24 }}>{authMode === "login" ? "Entre na sua conta" : "Crie sua conta"}</p>
+            
+            {authMode === "register" && (
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ fontSize: 13, fontWeight: 600, color: P.t2, marginBottom: 8, display: "block" }}>Nome</label>
+                <input type="text" value={authName} onChange={e => setAuthName(e.target.value)} placeholder="Seu nome"
+                  style={{ width: "100%", padding: "14px 16px", background: P.ip, border: `1px solid ${P.bd}`, borderRadius: 18, color: P.t1, fontSize: 15, fontFamily: FN.ui, outline: "none", boxSizing: "border-box" }} />
+              </div>
+            )}
+            
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ fontSize: 13, fontWeight: 600, color: P.t2, marginBottom: 8, display: "block" }}>Email</label>
+              <input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} placeholder="seu@email.com"
+                style={{ width: "100%", padding: "14px 16px", background: P.ip, border: `1px solid ${P.bd}`, borderRadius: 18, color: P.t1, fontSize: 15, fontFamily: FN.ui, outline: "none", boxSizing: "border-box" }} />
+            </div>
+            
+            <div style={{ marginBottom: 24 }}>
+              <label style={{ fontSize: 13, fontWeight: 600, color: P.t2, marginBottom: 8, display: "block" }}>Senha</label>
+              <input type="password" value={authPass} onChange={e => setAuthPass(e.target.value)} placeholder="Sua senha"
+                style={{ width: "100%", padding: "14px 16px", background: P.ip, border: `1px solid ${P.bd}`, borderRadius: 18, color: P.t1, fontSize: 15, fontFamily: FN.ui, outline: "none", boxSizing: "border-box" }} />
+            </div>
+            
+            <button onClick={() => handleLogin(modal === "login-trainer" ? "trainer" : "student")} disabled={authLoading || !authEmail || !authPass}
+              style={{ width: "100%", padding: "16px", borderRadius: 18, border: "none", background: authLoading ? P.t4 : `linear-gradient(135deg,${P.a},${P.pu})`, color: "#fff", fontSize: 16, fontWeight: 700, cursor: authLoading ? "wait" : "pointer", fontFamily: FN.ui, marginBottom: 16 }}>
+              {authLoading ? "Carregando..." : authMode === "login" ? "Entrar" : "Criar Conta"}
+            </button>
+            
+            <div style={{ textAlign: "center" }}>
+              <button onClick={() => setAuthMode(authMode === "login" ? "register" : "login")}
+                style={{ background: "none", border: "none", color: P.a, fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: FN.ui }}>
+                {authMode === "login" ? "Não tem conta? Criar agora" : "Já tem conta? Entrar"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {toast && (
         <div style={{ position: "fixed", top: 28, left: "50%", transform: "translateX(-50%)", background: "rgba(13,13,24,.95)", backdropFilter: "blur(28px)", border: `1px solid ${P.a}28`, borderRadius: 24, padding: "16px 32px", color: P.t1, fontWeight: 600, fontSize: 15, zIndex: 300, animation: "si .35s cubic-bezier(.16,1,.3,1)", boxShadow: `0 12px 48px rgba(0,0,0,.6)`, maxWidth: "90%", textAlign: "center", display: "flex", alignItems: "center", gap: 12 }}>
           <div style={{ width: 8, height: 8, borderRadius: "50%", background: P.a, flexShrink: 0 }} />{toast}
